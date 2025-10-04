@@ -1,13 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
+from config import get_input_channels
 
 class YOLOv1Backbone(nn.Module):
     def __init__(self, ch=3, num_classes=80):
         super().__init__()
         self.ch = ch
         self.num_classes = num_classes
-        self.conv1_1 = nn.Conv2d(3 if self.ch == 3 else 1, 64, kernel_size=7, stride=2, padding=3)
+        self.conv1_1 = nn.Conv2d(get_input_channels(), 64, kernel_size=7, stride=2, padding=3)
         self.relu1_1 = nn.LeakyReLU(0.1)
         self.maxpool1_1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
@@ -75,18 +76,15 @@ class YOLOv1Backbone(nn.Module):
         # Conv layers
         x = self.relu1_1(self.conv1_1(x))
         x = self.maxpool1_1(x)
-        print(f"Conv1_1: {x.shape}")
         
         x = self.relu2_1(self.conv2_1(x))
         x = self.maxpool2_1(x)
-        print(f"Conv2_1: {x.shape}")
         
         x = self.relu3_1(self.conv3_1(x))
         x = self.relu3_2(self.conv3_2(x))
         x = self.relu3_3(self.conv3_3(x))
         x = self.relu3_4(self.conv3_4(x))
         x = self.maxpool3_4(x)
-        print(f"Conv3_4: {x.shape}")
         
         x = self.relu4_1(self.conv4_1(x))
         x = self.relu4_2(self.conv4_2(x))
@@ -99,7 +97,6 @@ class YOLOv1Backbone(nn.Module):
         x = self.relu4_9(self.conv4_9(x))
         x = self.relu4_10(self.conv4_10(x))
         x = self.maxpool4_10(x)
-        print(f"Conv4_10: {x.shape}")
         
         x = self.relu5_1(self.conv5_1(x))
         x = self.relu5_2(self.conv5_2(x))
@@ -107,21 +104,17 @@ class YOLOv1Backbone(nn.Module):
         x = self.relu5_4(self.conv5_4(x))
         x = self.relu5_5(self.conv5_5(x))
         x = self.relu5_6(self.conv5_6(x))
-        print(f"Conv5_6: {x.shape}")
         
         x = self.relu6_1(self.conv6_1(x))
         x = self.relu6_2(self.conv6_2(x))
-        print(f"Conv6_2: {x.shape}")
 
         # Flatten for FC layers
         x = x.view(x.size(0), -1)  # (batch_size, 7*7*1024)
-        print(f"Flatten: {x.shape}")
         
         # FC layers
         x = self.relu_fc1(self.fc1(x))
         x = self.dropout_fc1(x)
         x = self.fc2(x)
-        print(f"FC2: {x.shape}")
         
         return x
 
@@ -131,6 +124,17 @@ class YOLOv1(nn.Module):
         self.ch = ch
         self.num_classes = num_classes
         self.backbone = YOLOv1Backbone(ch=self.ch, num_classes=self.num_classes)
+        self._initialize_weights()
+        
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         x = self.backbone(x)  # (batch_size, 7*7*(5*2+num_classes))
@@ -139,10 +143,8 @@ class YOLOv1(nn.Module):
 
 
 if __name__ == "__main__":
-    # 모델 생성
     model = YOLOv1(ch=3, num_classes=80)
     
-    # 샘플 입력 텐서 생성
     x = torch.randn(1, 3, 448, 448)
     
     print("=" * 50)
@@ -150,7 +152,6 @@ if __name__ == "__main__":
     print("=" * 50)
     print(f"Input shape: {x.shape}")
     
-    # Forward pass
     with torch.no_grad():
         output = model(x)
     
@@ -158,7 +159,6 @@ if __name__ == "__main__":
     print(f"Expected output shape: (1, 7, 7, 90) for 80 classes")
     print("=" * 50)
     
-    # torchsummary로 모델 구조 확인
     try:
         from torchsummary import summary
         print("\nModel Summary:")
