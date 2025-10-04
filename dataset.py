@@ -30,13 +30,9 @@ def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80):
         cell_x = cx * grid_size - grid_x
         cell_y = cy * grid_size - grid_y
         
-        # 두 박스 중 비어있는 박스에 할당
-        if grid[grid_y, grid_x, 4] == 0:  # 첫 번째 박스가 비어있으면
+        if grid[grid_y, grid_x, 4] == 0:
             grid[grid_y, grid_x, :5] = torch.clamp(torch.tensor([cell_x, cell_y, w, h, 1]), 0.0, 1.0)
-        else:  # 첫 번째 박스가 있으면 두 번째 박스에 할당
-            grid[grid_y, grid_x, 5:10] = torch.clamp(torch.tensor([cell_x, cell_y, w, h, 1]), 0.0, 1.0)
         
-        # 클래스 확률은 항상 설정
         grid[grid_y, grid_x, 10 + int(cls)] = 1.0
     return grid
 

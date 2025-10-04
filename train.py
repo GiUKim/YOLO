@@ -1,4 +1,4 @@
-from util import YOLOv1Loss, calculate_metrics
+from util import YOLOv1Loss, calculate_yolov1_metrics, calculate_map_metrics
 from model import YOLOv1
 from dataset import YOLOv1Dataset
 import torch
@@ -56,7 +56,16 @@ def evaluate(model, criterion, dataloader):
             targets = targets.to(DEVICE_CONFIG['device'])
             
             outputs = model(images)
-            calculate_metrics(outputs, targets)
+            # calculate_metrics(outputs, targets)
+            precision, recall, f1_score = calculate_yolov1_metrics(outputs, targets)
+            map_50 = calculate_map_metrics(outputs, targets, iou_thresholds=[0.5])
+            map_50_95 = calculate_map_metrics(outputs, targets, iou_thresholds=np.arange(0.5, 1.0, 0.05))
+            print('-' * 60)
+            print(f'mAP@0.5: {map_50:.4f}, mAP@0.5-0.95: {map_50_95:.4f}')
+            for cls in range(DATASET_CONFIG['num_classes']):
+                print(f'Class {cls}: Precision: {precision[cls]:.4f}, Recall: {recall[cls]:.4f}, F1 Score: {f1_score[cls]:.4f}')
+            print('-' * 60)
+            
             loss = criterion(outputs, targets)
             
             total_loss += loss.item()
