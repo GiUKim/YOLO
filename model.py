@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
-from config import get_input_channels
+from config import DATASET_CONFIG
 
 class YOLOv1Backbone(nn.Module):
     def __init__(self, ch=3, num_classes=80):
         super().__init__()
         self.ch = ch
         self.num_classes = num_classes
-        self.conv1_1 = nn.Conv2d(get_input_channels(), 64, kernel_size=7, stride=2, padding=3)
+        self.conv1_1 = nn.Conv2d(DATASET_CONFIG['input_channels'], 64, kernel_size=7, stride=2, padding=3)
         self.relu1_1 = nn.LeakyReLU(0.1)
         self.maxpool1_1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
@@ -139,6 +139,12 @@ class YOLOv1(nn.Module):
     def forward(self, x):
         x = self.backbone(x)  # (batch_size, 7*7*(5*2+num_classes))
         x = x.view(x.size(0), 7, 7, 5 * 2 + self.num_classes)  # (batch_size, 7, 7, 5*2+num_classes)
+        
+        box1 = torch.sigmoid(x[:, :, :, 0:5])
+        box2 = torch.sigmoid(x[:, :, :, 5:10])
+        class_logits = x[:, :, :, 10:]
+        classes = torch.softmax(class_logits, dim=-1)
+        x = torch.cat([box1, box2, classes], dim=-1)
         return x
 
 

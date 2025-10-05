@@ -18,10 +18,17 @@ def load_label_txt(file_path):
 
 # input label shape: (?, 5) cls, cx, cy, w, h
 # output label shape: (grid_size, grid_size, 5*2 + num_classes)
-def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80):
+def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=None):
+    if num_classes is None:
+        num_classes = DATASET_CONFIG['num_classes']
     grid = torch.zeros(grid_size, grid_size, 5*2 + num_classes)
     if label.shape[0] == 0: # background img
         return grid
+
+    if label.shape[0] > 0:
+        areas = label[:, 3] * label[:, 4]
+        sorted_indices = np.argsort(areas)[::-1]
+        label = label[sorted_indices]
 
     for i in range(label.shape[0]):
         cls, cx, cy, w, h = label[i]
@@ -48,9 +55,9 @@ class YOLOv1Dataset(Dataset):
     def __getitem__(self, idx):
         image_path = self.image_files[idx]
         label_path = image_path.replace('.jpg', '.txt')
-        image = Image.open(image_path).convert(get_image_mode())
+        image = Image.open(image_path).convert('L' if DATASET_CONFIG['input_channels'] == 1 else 'RGB')
         label = load_label_txt(label_path)
-        gt = YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80)
+        gt = YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=DATASET_CONFIG['num_classes'])
         if self.transform:
             image = self.transform(image)
         return image, gt
