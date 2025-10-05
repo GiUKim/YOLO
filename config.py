@@ -28,6 +28,12 @@ TRAIN_CONFIG = {
     'momentum': 0.9,
     'lambda_coord': 5.0,
     'lambda_noobj': 0.5,
+    'scheduler_type': 'cosine',  # 'step', 'cosine', 'none'
+    'scheduler_params': {
+        'step': {'step_size': 7, 'gamma': 0.1},
+        'cosine': {'T_max': 100, 'eta_min': 1e-6},
+        'none': {}
+    }
 }
 
 AUGMENTATION_CONFIG = {

@@ -149,7 +149,7 @@ class YOLOv1(nn.Module):
 
 
 if __name__ == "__main__":
-    model = YOLOv1(ch=3, num_classes=80)
+    model = YOLOv1(ch=3, num_classes=DATASET_CONFIG['num_classes'])
     
     x = torch.randn(1, 3, 448, 448)
     
@@ -162,7 +162,6 @@ if __name__ == "__main__":
         output = model(x)
     
     print(f"Output shape: {output.shape}")
-    print(f"Expected output shape: (1, 7, 7, 90) for 80 classes")
     print("=" * 50)
     
     try:
