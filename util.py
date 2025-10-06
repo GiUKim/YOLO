@@ -14,144 +14,168 @@ class YOLOv1Loss(nn.Module):
     def forward(self, pred, target):
         batch_size = pred.size(0)
         
-        # 1. 입력 검증
         if torch.isnan(pred).any():
             return torch.tensor(0.0, requires_grad=True, device=pred.device)
         
         if torch.isnan(target).any():
             return torch.tensor(0.0, requires_grad=True, device=target.device)
         
-        # 2. 텐서 분할
         pred_box1 = pred[:, :, :, :5]
         target_box1 = target[:, :, :, :5]
         
         pred_box2 = pred[:, :, :, 5:10]
-        target_box2 = target[:, :, :, 5:10]
         
         pred_class = pred[:, :, :, 10:]
         target_class = target[:, :, :, 10:]
         
-        # 3. 마스크 생성
         obj_mask1 = target_box1[:, :, :, 4] == 1
-        obj_mask2 = target_box2[:, :, :, 4] == 1
         noobj_mask1 = target_box1[:, :, :, 4] == 0
-        noobj_mask2 = target_box2[:, :, :, 4] == 0
+        noobj_mask2 = torch.ones_like(target_box1[:, :, :, 4], dtype=torch.bool)
         
-        obj_mask_class = (obj_mask1 | obj_mask2)
+        obj_mask_class = obj_mask1
         
-        # 4. 좌표 손실 계산 (Box 1)
         coord_loss = 0
         if obj_mask1.sum() > 0:
-            # XY 손실
-            xy_pred = pred_box1[:, :, :, :2][obj_mask1]
-            xy_target = target_box1[:, :, :, :2][obj_mask1]
-            xy_loss1 = F.mse_loss(xy_pred, xy_target, reduction='sum')
+            obj_indices = torch.where(obj_mask1)  # (batch_indices, cell_y_indices, cell_x_indices)
             
-            if torch.isnan(xy_loss1):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
+            iou1_values = []
+            iou2_values = []
+            responsible_mask1 = []
+            responsible_mask2 = []
+            for i in range(len(obj_indices[0])):
+                batch_idx = obj_indices[0][i]
+                cell_y = obj_indices[1][i]
+                cell_x = obj_indices[2][i]
+                
+                pred_box1_cell = pred_box1[batch_idx, cell_y, cell_x, :4]
+                pred_box2_cell = pred_box2[batch_idx, cell_y, cell_x, :4]
+                target_box_cell = target_box1[batch_idx, cell_y, cell_x, :4]
+                
+                pred_box1_img = convert_coordinate_cell_to_image_tensor(pred_box1_cell, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                pred_box2_img = convert_coordinate_cell_to_image_tensor(pred_box2_cell, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                target_box_img = convert_coordinate_cell_to_image_tensor(target_box_cell, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                
+                iou1 = iou_tensor(pred_box1_img, target_box_img)
+                iou2 = iou_tensor(pred_box2_img, target_box_img)
+                
+                iou1_values.append(iou1)
+                iou2_values.append(iou2)
+                
+                # Responsibility assignment
+                if iou1 >= iou2:
+                    responsible_mask1.append(True)
+                    responsible_mask2.append(False)
+                else:
+                    responsible_mask1.append(False)
+                    responsible_mask2.append(True)
             
-            # WH 손실 (sqrt 안전성 확보)
-            wh_pred = pred_box1[:, :, :, 2:4][obj_mask1]
-            wh_target = target_box1[:, :, :, 2:4][obj_mask1]
+            if any(responsible_mask1):
+                responsible_indices1 = [i for i, mask in enumerate(responsible_mask1) if mask]
+                
+                xy_pred1 = torch.stack([pred_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
+                                      for i in responsible_indices1])
+                xy_target1 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
+                                        for i in responsible_indices1])
+                xy_loss1 = F.mse_loss(xy_pred1, xy_target1, reduction='sum')
+                
+                wh_pred1 = torch.stack([pred_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
+                                      for i in responsible_indices1])
+                wh_target1 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
+                                        for i in responsible_indices1])
+                
+                wh_pred1_clamped = torch.clamp(wh_pred1, min=1e-8)
+                wh_target1_clamped = torch.clamp(wh_target1, min=1e-8)
+                
+                wh_pred1_sqrt = torch.sqrt(wh_pred1_clamped)
+                wh_target1_sqrt = torch.sqrt(wh_target1_clamped)
+                
+                wh_loss1 = F.mse_loss(wh_pred1_sqrt, wh_target1_sqrt, reduction='sum')
+                
+                coord_loss += xy_loss1 + wh_loss1
             
-            # 음수 값 클램핑
-            wh_pred_clamped = torch.clamp(wh_pred, min=1e-8)
-            wh_target_clamped = torch.clamp(wh_target, min=1e-8)
-            
-            wh_pred_sqrt = torch.sqrt(wh_pred_clamped)
-            wh_target_sqrt = torch.sqrt(wh_target_clamped)
-            
-            wh_loss1 = F.mse_loss(wh_pred_sqrt, wh_target_sqrt, reduction='sum')
-            
-            if torch.isnan(wh_loss1):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
-            
-            coord_loss += xy_loss1 + wh_loss1
+            if any(responsible_mask2):
+                responsible_indices2 = [i for i, mask in enumerate(responsible_mask2) if mask]
+                
+                xy_pred2 = torch.stack([pred_box2[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
+                                      for i in responsible_indices2])
+                xy_target2 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
+                                        for i in responsible_indices2])
+                xy_loss2 = F.mse_loss(xy_pred2, xy_target2, reduction='sum')
+                
+                wh_pred2 = torch.stack([pred_box2[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
+                                      for i in responsible_indices2])
+                wh_target2 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
+                                        for i in responsible_indices2])
+                
+                wh_pred2_clamped = torch.clamp(wh_pred2, min=1e-8)
+                wh_target2_clamped = torch.clamp(wh_target2, min=1e-8)
+                
+                wh_pred2_sqrt = torch.sqrt(wh_pred2_clamped)
+                wh_target2_sqrt = torch.sqrt(wh_target2_clamped)
+                
+                wh_loss2 = F.mse_loss(wh_pred2_sqrt, wh_target2_sqrt, reduction='sum')
+                
+                coord_loss += (xy_loss2 + wh_loss2)
         
-        # 5. 좌표 손실 계산 (Box 2)
-        if obj_mask2.sum() > 0:
-            # XY 손실
-            xy_pred = pred_box2[:, :, :, :2][obj_mask2]
-            xy_target = target_box2[:, :, :, :2][obj_mask2]
-            xy_loss2 = F.mse_loss(xy_pred, xy_target, reduction='sum')
-            
-            if torch.isnan(xy_loss2):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
-            
-            # WH 손실
-            wh_pred = pred_box2[:, :, :, 2:4][obj_mask2]
-            wh_target = target_box2[:, :, :, 2:4][obj_mask2]
-            
-            wh_pred_clamped = torch.clamp(wh_pred, min=1e-8)
-            wh_target_clamped = torch.clamp(wh_target, min=1e-8)
-            
-            wh_pred_sqrt = torch.sqrt(wh_pred_clamped)
-            wh_target_sqrt = torch.sqrt(wh_target_clamped)
-            
-            wh_loss2 = F.mse_loss(wh_pred_sqrt, wh_target_sqrt, reduction='sum')
-            
-            if torch.isnan(wh_loss2):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
-            
-            coord_loss += xy_loss2 + wh_loss2
-        
-        # 6. 좌표 손실에 가중치 적용
         coord_loss *= self.lambda_coord
         
-        # 7. 신뢰도 손실 계산
         conf_loss = 0
-        
-        # Object가 있는 경우
         if obj_mask1.sum() > 0:
-            conf_pred = pred_box1[:, :, :, 4][obj_mask1]
-            conf_target = target_box1[:, :, :, 4][obj_mask1]
-            conf_loss += F.mse_loss(conf_pred, conf_target, reduction='sum')
-            
-            if torch.isnan(conf_loss):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
-        
-        if obj_mask2.sum() > 0:
-            conf_pred = pred_box2[:, :, :, 4][obj_mask2]
-            conf_target = target_box2[:, :, :, 4][obj_mask2]
-            conf_loss += F.mse_loss(conf_pred, conf_target, reduction='sum')
-            
-            if torch.isnan(conf_loss):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
-        
-        # No-object가 있는 경우
+            for i in range(len(obj_indices[0])):
+                batch_idx = obj_indices[0][i]
+                cell_y = obj_indices[1][i] 
+                cell_x = obj_indices[2][i]
+                
+                iou1 = iou1_values[i]
+                iou2 = iou2_values[i]
+                
+                if iou1 >= iou2:
+                    conf_pred1 = pred_box1[batch_idx, cell_y, cell_x, 4]
+                    conf_target1 = iou1.clone().detach()
+                    conf_loss += F.mse_loss(conf_pred1, conf_target1)
+                    
+                    conf_pred2 = pred_box2[batch_idx, cell_y, cell_x, 4]
+                    conf_target2 = torch.zeros_like(conf_pred2)
+                    conf_loss += F.mse_loss(conf_pred2, conf_target2)
+                else:
+                    conf_pred2 = pred_box2[batch_idx, cell_y, cell_x, 4]
+                    conf_target2 = iou2.clone().detach()
+                    conf_loss += F.mse_loss(conf_pred2, conf_target2)
+                    
+                    conf_pred1 = pred_box1[batch_idx, cell_y, cell_x, 4]
+                    conf_target1 = torch.zeros_like(conf_pred1)
+                    conf_loss += F.mse_loss(conf_pred1, conf_target1)
+
         if noobj_mask1.sum() > 0:
-            conf_pred = pred_box1[:, :, :, 4][noobj_mask1]
-            conf_target = target_box1[:, :, :, 4][noobj_mask1]
-            noobj_loss1 = F.mse_loss(conf_pred, conf_target, reduction='sum')
-            conf_loss += self.lambda_noobj * noobj_loss1
+            conf_pred1 = pred_box1[noobj_mask1][:, 4]
+            conf_target1 = torch.zeros_like(conf_pred1)
+            conf_loss += self.lambda_noobj * F.mse_loss(conf_pred1, conf_target1)
             
-            if torch.isnan(noobj_loss1):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
+            conf_pred2 = pred_box2[noobj_mask2][:, 4]
+            conf_target2 = torch.zeros_like(conf_pred2)
+            conf_loss += self.lambda_noobj * F.mse_loss(conf_pred2, conf_target2)
         
-        if noobj_mask2.sum() > 0:
-            conf_pred = pred_box2[:, :, :, 4][noobj_mask2]
-            conf_target = target_box2[:, :, :, 4][noobj_mask2]
-            noobj_loss2 = F.mse_loss(conf_pred, conf_target, reduction='sum')
-            conf_loss += self.lambda_noobj * noobj_loss2
-            
-            if torch.isnan(noobj_loss2):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
-        
-        # 8. 클래스 손실 계산
         class_loss = 0
-        if obj_mask_class.sum() > 0:
-            class_pred = pred_class[obj_mask_class]
-            class_target = target_class[obj_mask_class]
-            class_loss = F.mse_loss(class_pred, class_target, reduction='sum')
+        if obj_mask1.sum() > 0:
+            if any(responsible_mask1):
+                responsible_indices1 = [i for i, mask in enumerate(responsible_mask1) if mask]
+                
+                class_pred1 = torch.stack([pred_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
+                                        for i in responsible_indices1])
+                class_target1 = torch.stack([target_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
+                                        for i in responsible_indices1])
+                class_loss += F.mse_loss(class_pred1, class_target1)
             
-            if torch.isnan(class_loss):
-                return torch.tensor(0.0, requires_grad=True, device=pred.device)
+            if any(responsible_mask2):
+                responsible_indices2 = [i for i, mask in enumerate(responsible_mask2) if mask]
+                
+                class_pred2 = torch.stack([pred_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
+                                        for i in responsible_indices2])
+                class_target2 = torch.stack([target_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
+                                        for i in responsible_indices2])
+                class_loss += F.mse_loss(class_pred2, class_target2)
         
-        # 9. 총 손실 계산
         total_loss = coord_loss + conf_loss + class_loss
-        
-        if torch.isnan(total_loss):
-            return torch.tensor(0.0, requires_grad=True, device=pred.device)
         
         return total_loss / batch_size
 
@@ -163,6 +187,40 @@ def convert_coordinate_cell_to_image(box, cell_y, cell_x, grid_size):
     new_box[0] = new_cx
     new_box[1] = new_cy
     return new_box
+
+def convert_coordinate_cell_to_image_tensor(box, cell_y, cell_x, grid_size):
+    cx, cy = box[0], box[1]
+    new_cx = (1 / grid_size) * (cell_x + cx)
+    new_cy = (1 / grid_size) * (cell_y + cy)
+    
+    new_box = box.clone()
+    new_box[0] = new_cx
+    new_box[1] = new_cy
+    return new_box
+
+def iou_tensor(box1, box2):
+    x1, y1, w1, h1 = box1[0], box1[1], box1[2], box1[3]
+    x2, y2, w2, h2 = box2[0], box2[1], box2[2], box2[3]
+    
+    x1_min, y1_min = x1 - w1/2, y1 - h1/2
+    x1_max, y1_max = x1 + w1/2, y1 + h1/2
+    x2_min, y2_min = x2 - w2/2, y2 - h2/2
+    x2_max, y2_max = x2 + w2/2, y2 + h2/2
+    
+    inter_x_min = torch.max(x1_min, x2_min)
+    inter_y_min = torch.max(y1_min, y2_min)
+    inter_x_max = torch.min(x1_max, x2_max)
+    inter_y_max = torch.min(y1_max, y2_max)
+    
+    inter_width = torch.clamp(inter_x_max - inter_x_min, min=0)
+    inter_height = torch.clamp(inter_y_max - inter_y_min, min=0)
+    inter_area = inter_width * inter_height
+    
+    box1_area = w1 * h1
+    box2_area = w2 * h2
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / (union_area + 1e-6)
 
 def iou(box1, box2):
     x1, y1, w1, h1 = box1
@@ -208,9 +266,9 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
                 target_box1 = cell_target[:5]
                                 
                 pred_conf1, pred_conf2 = pred_box1[-1], pred_box2[-1]
-                pred_box1[:-1] = convert_coordinate_cell_to_image(pred_box1[:-1], cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                pred_box2[:-1] = convert_coordinate_cell_to_image(pred_box2[:-1], cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                target_box1[:-1] = convert_coordinate_cell_to_image(target_box1[:-1], cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                pred_box1 = convert_coordinate_cell_to_image(pred_box1, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                pred_box2 = convert_coordinate_cell_to_image(pred_box2, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                target_box1 = convert_coordinate_cell_to_image(target_box1, cell_y, cell_x, DATASET_CONFIG['grid_size'])
                 pred_has_obj1 = (pred_conf1 > conf_threshold)
                 pred_has_obj2 = (pred_conf2 > conf_threshold)
 
