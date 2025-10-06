@@ -284,13 +284,14 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
                         fp[pred_cls] += 1
                     if (pred_has_obj2):
                         fp[pred_cls] += 1
+                        continue
 
                 # case2 : pred #0, gt #1
                 # case3 : pred #1, gt #1
                 # case4 : pred #2, gt #1
                 if (not pred_has_obj1) and (not pred_has_obj2): # case 2
                     fn[target_cls] += 1
-                if (pred_has_obj1 and not pred_has_obj2) or (not pred_has_obj1 and pred_has_obj2): # case 3
+                if ((pred_has_obj1 and not pred_has_obj2) or (not pred_has_obj1 and pred_has_obj2)): # case 3
                     if (pred_has_obj1):
                         _iou = iou(pred_box1[:-1], target_box1[:-1])
                         if (_iou > iou_threshold) and (pred_cls == target_cls):
@@ -305,14 +306,14 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
                             fp[pred_cls] += 1
                 if (pred_has_obj1) and (pred_has_obj2): # case 4
                     if (pred_cls == target_cls):
-                        fp[pred_cls] += 1
                         _iou1 = iou(pred_box1[:-1], target_box1[:-1])
                         _iou2 = iou(pred_box2[:-1], target_box1[:-1])
                         max_iou = max(_iou1, _iou2)
                         if (max_iou > iou_threshold):
                             tp[target_cls] += 1
-                        else:
                             fp[pred_cls] += 1
+                        else:
+                            fp[pred_cls] += 2
                     else:
                         fp[pred_cls] += 2
     return tp, fp, fn
