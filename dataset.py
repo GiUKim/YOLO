@@ -32,8 +32,6 @@ def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80):
         
         if grid[grid_y, grid_x, 4] == 0:
             grid[grid_y, grid_x, :5] = torch.clamp(torch.tensor([cell_x, cell_y, w, h, 1]), 0.0, 1.0)
-        else:
-            grid[grid_y, grid_x, 5:10] = torch.clamp(torch.tensor([cell_x, cell_y, w, h, 1]), 0.0, 1.0)
         
         grid[grid_y, grid_x, 10 + int(cls)] = 1.0
     return grid

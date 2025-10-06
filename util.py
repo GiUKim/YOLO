@@ -13,171 +13,66 @@ class YOLOv1Loss(nn.Module):
         
     def forward(self, pred, target):
         batch_size = pred.size(0)
-        
-        if torch.isnan(pred).any():
-            return torch.tensor(0.0, requires_grad=True, device=pred.device)
-        
-        if torch.isnan(target).any():
-            return torch.tensor(0.0, requires_grad=True, device=target.device)
-        
-        pred_box1 = pred[:, :, :, :5]
-        target_box1 = target[:, :, :, :5]
-        
-        pred_box2 = pred[:, :, :, 5:10]
-        
-        pred_class = pred[:, :, :, 10:]
-        target_class = target[:, :, :, 10:]
-        
-        obj_mask1 = target_box1[:, :, :, 4] == 1
-        noobj_mask1 = target_box1[:, :, :, 4] == 0
-        noobj_mask2 = torch.ones_like(target_box1[:, :, :, 4], dtype=torch.bool)
-        
-        obj_mask_class = obj_mask1
-        
-        coord_loss = 0
-        if obj_mask1.sum() > 0:
-            obj_indices = torch.where(obj_mask1)  # (batch_indices, cell_y_indices, cell_x_indices)
-            
-            iou1_values = []
-            iou2_values = []
-            responsible_mask1 = []
-            responsible_mask2 = []
-            for i in range(len(obj_indices[0])):
-                batch_idx = obj_indices[0][i]
-                cell_y = obj_indices[1][i]
-                cell_x = obj_indices[2][i]
-                
-                pred_box1_cell = pred_box1[batch_idx, cell_y, cell_x, :4]
-                pred_box2_cell = pred_box2[batch_idx, cell_y, cell_x, :4]
-                target_box_cell = target_box1[batch_idx, cell_y, cell_x, :4]
-                
-                pred_box1_img = convert_coordinate_cell_to_image_tensor(pred_box1_cell, cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                pred_box2_img = convert_coordinate_cell_to_image_tensor(pred_box2_cell, cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                target_box_img = convert_coordinate_cell_to_image_tensor(target_box_cell, cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                
-                iou1 = iou_tensor(pred_box1_img, target_box_img)
-                iou2 = iou_tensor(pred_box2_img, target_box_img)
-                
-                iou1_values.append(iou1)
-                iou2_values.append(iou2)
-                
-                # Responsibility assignment
-                if iou1 >= iou2:
-                    responsible_mask1.append(True)
-                    responsible_mask2.append(False)
-                else:
-                    responsible_mask1.append(False)
-                    responsible_mask2.append(True)
-            
-            if any(responsible_mask1):
-                responsible_indices1 = [i for i, mask in enumerate(responsible_mask1) if mask]
-                
-                xy_pred1 = torch.stack([pred_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
-                                      for i in responsible_indices1])
-                xy_target1 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
-                                        for i in responsible_indices1])
-                xy_loss1 = F.mse_loss(xy_pred1, xy_target1, reduction='sum')
-                
-                wh_pred1 = torch.stack([pred_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
-                                      for i in responsible_indices1])
-                wh_target1 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
-                                        for i in responsible_indices1])
-                
-                wh_pred1_clamped = torch.clamp(wh_pred1, min=1e-8)
-                wh_target1_clamped = torch.clamp(wh_target1, min=1e-8)
-                
-                wh_pred1_sqrt = torch.sqrt(wh_pred1_clamped)
-                wh_target1_sqrt = torch.sqrt(wh_target1_clamped)
-                
-                wh_loss1 = F.mse_loss(wh_pred1_sqrt, wh_target1_sqrt, reduction='sum')
-                
-                coord_loss += xy_loss1 + wh_loss1
-            
-            if any(responsible_mask2):
-                responsible_indices2 = [i for i, mask in enumerate(responsible_mask2) if mask]
-                
-                xy_pred2 = torch.stack([pred_box2[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
-                                      for i in responsible_indices2])
-                xy_target2 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], :2] 
-                                        for i in responsible_indices2])
-                xy_loss2 = F.mse_loss(xy_pred2, xy_target2, reduction='sum')
-                
-                wh_pred2 = torch.stack([pred_box2[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
-                                      for i in responsible_indices2])
-                wh_target2 = torch.stack([target_box1[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i], 2:4] 
-                                        for i in responsible_indices2])
-                
-                wh_pred2_clamped = torch.clamp(wh_pred2, min=1e-8)
-                wh_target2_clamped = torch.clamp(wh_target2, min=1e-8)
-                
-                wh_pred2_sqrt = torch.sqrt(wh_pred2_clamped)
-                wh_target2_sqrt = torch.sqrt(wh_target2_clamped)
-                
-                wh_loss2 = F.mse_loss(wh_pred2_sqrt, wh_target2_sqrt, reduction='sum')
-                
-                coord_loss += (xy_loss2 + wh_loss2)
-        
-        coord_loss *= self.lambda_coord
-        
-        conf_loss = 0
-        if obj_mask1.sum() > 0:
-            for i in range(len(obj_indices[0])):
-                batch_idx = obj_indices[0][i]
-                cell_y = obj_indices[1][i] 
-                cell_x = obj_indices[2][i]
-                
-                iou1 = iou1_values[i]
-                iou2 = iou2_values[i]
-                
-                if iou1 >= iou2:
-                    conf_pred1 = pred_box1[batch_idx, cell_y, cell_x, 4]
-                    conf_target1 = iou1.clone().detach()
-                    conf_loss += F.mse_loss(conf_pred1, conf_target1)
-                    
-                    conf_pred2 = pred_box2[batch_idx, cell_y, cell_x, 4]
-                    conf_target2 = torch.zeros_like(conf_pred2)
-                    conf_loss += F.mse_loss(conf_pred2, conf_target2)
-                else:
-                    conf_pred2 = pred_box2[batch_idx, cell_y, cell_x, 4]
-                    conf_target2 = iou2.clone().detach()
-                    conf_loss += F.mse_loss(conf_pred2, conf_target2)
-                    
-                    conf_pred1 = pred_box1[batch_idx, cell_y, cell_x, 4]
-                    conf_target1 = torch.zeros_like(conf_pred1)
-                    conf_loss += F.mse_loss(conf_pred1, conf_target1)
+        obj_mask1 = target[:, :, :, 4] == 1
 
-        if noobj_mask1.sum() > 0:
-            conf_pred1 = pred_box1[noobj_mask1][:, 4]
-            conf_target1 = torch.zeros_like(conf_pred1)
-            conf_loss += self.lambda_noobj * F.mse_loss(conf_pred1, conf_target1)
-            
-            conf_pred2 = pred_box2[noobj_mask2][:, 4]
-            conf_target2 = torch.zeros_like(conf_pred2)
-            conf_loss += self.lambda_noobj * F.mse_loss(conf_pred2, conf_target2)
-        
-        class_loss = 0
-        if obj_mask1.sum() > 0:
-            if any(responsible_mask1):
-                responsible_indices1 = [i for i, mask in enumerate(responsible_mask1) if mask]
-                
-                class_pred1 = torch.stack([pred_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
-                                        for i in responsible_indices1])
-                class_target1 = torch.stack([target_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
-                                        for i in responsible_indices1])
-                class_loss += F.mse_loss(class_pred1, class_target1)
-            
-            if any(responsible_mask2):
-                responsible_indices2 = [i for i, mask in enumerate(responsible_mask2) if mask]
-                
-                class_pred2 = torch.stack([pred_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
-                                        for i in responsible_indices2])
-                class_target2 = torch.stack([target_class[obj_indices[0][i], obj_indices[1][i], obj_indices[2][i]] 
-                                        for i in responsible_indices2])
-                class_loss += F.mse_loss(class_pred2, class_target2)
-        
-        total_loss = coord_loss + conf_loss + class_loss
-        
-        return total_loss / batch_size
+        confidence_loss = 0.0
+        coord_loss = 0.0
+        class_loss = 0.0
+        confidence_loss_count = 0
+        coord_loss_count = 0
+        class_loss_count = 0
+        # select responsible box
+        # Apply lambda_coord and lambda_noobj weights as in YOLOv1 paper
+        for b in range(batch_size):
+            for cell_y in range(DATASET_CONFIG['grid_size']):
+                for cell_x in range(DATASET_CONFIG['grid_size']):
+                    if obj_mask1[b, cell_y, cell_x]:
+                        # GT object exists in this cell
+                        # GT object exist -> competition of box1, box2 (responsible box)
+                        pred_box1 = pred[b, cell_y, cell_x, :5]
+                        pred_box2 = pred[b, cell_y, cell_x, 5:10]
+                        target_box = target[b, cell_y, cell_x, :5]
+                        pred_converted_box1 = convert_coordinate_cell_to_image_tensor(pred_box1, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                        pred_converted_box2 = convert_coordinate_cell_to_image_tensor(pred_box2, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                        target_converted_box = convert_coordinate_cell_to_image_tensor(target_box, cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                        iou1 = iou_tensor(pred_converted_box1, target_converted_box)
+                        iou2 = iou_tensor(pred_converted_box2, target_converted_box)
+                        if iou1 > iou2:
+                            # calc classes, coord loss box1 only
+                            coord_loss += F.mse_loss(pred_box1[:2], target_box[:2])
+                            coord_loss += F.mse_loss(torch.sqrt(pred_box1[2:4].clamp(min=1e-6)), torch.sqrt(target_box[2:4].clamp(min=1e-6)))
+                            confidence_loss += F.mse_loss(pred_box1[4], torch.ones_like(pred_box1[4]))
+                        else:
+                            # box2 is responsible
+                            coord_loss += F.mse_loss(pred_box2[:2], target_box[:2])
+                            coord_loss += F.mse_loss(torch.sqrt(pred_box2[2:4].clamp(min=1e-6)), torch.sqrt(target_box[2:4].clamp(min=1e-6)))
+                            confidence_loss += F.mse_loss(pred_box2[4], torch.ones_like(pred_box2[4]))
+                        confidence_loss_count += 1 # for average loss
+                        coord_loss_count += 1 # for average loss
+                        # class loss
+                        class_loss += F.mse_loss(pred[b, cell_y, cell_x, 10:], target[b, cell_y, cell_x, 10:])
+                        class_loss_count += 1 # for average loss
+                    else:
+                        # only calculate confidence negative loss (no object)
+                        # Both box1 and box2 confidence losses for noobj
+                        pred_box1 = pred[b, cell_y, cell_x, :5]
+                        pred_box2 = pred[b, cell_y, cell_x, 5:10]
+                        confidence_loss += self.lambda_noobj * F.mse_loss(pred_box1[4], torch.zeros_like(pred_box1[4]))
+                        confidence_loss += self.lambda_noobj * F.mse_loss(pred_box2[4], torch.zeros_like(pred_box2[4]))
+                        confidence_loss_count += 2 # for average loss
+
+        # Average the losses
+        if confidence_loss_count > 0:
+            confidence_loss = confidence_loss / confidence_loss_count
+        if coord_loss_count > 0:
+            coord_loss = coord_loss / coord_loss_count
+        if class_loss_count > 0:
+            class_loss = class_loss / class_loss_count
+
+        # Apply lambda_coord and lambda_noobj as in YOLOv1 paper
+        total_loss = self.lambda_coord * coord_loss + confidence_loss + class_loss
+        return total_loss
+
 
 def convert_coordinate_cell_to_image(box, cell_y, cell_x, grid_size):
     cx, cy = box[:2]
