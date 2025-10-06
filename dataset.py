@@ -54,7 +54,7 @@ class YOLOv1Dataset(Dataset):
         label_path = image_path.replace('.jpg', '.txt')
         image = Image.open(image_path).convert(get_image_mode())
         label = load_label_txt(label_path)
-        gt = YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80)
+        gt = YOLOv1_convert_label_to_grid(label, grid_size=DATASET_CONFIG['grid_size'], num_classes=DATASET_CONFIG['num_classes'])
         if self.transform:
             image = self.transform(image)
         return image, gt

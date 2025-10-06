@@ -3,7 +3,6 @@ YOLO 프로젝트 설정 파일
 """
 import torch
 
-# 데이터셋 설정
 DATASET_CONFIG = {
     'input_channels': 3,  # 3: RGB, 1: Grayscale
     'image_width': 448,
@@ -13,14 +12,12 @@ DATASET_CONFIG = {
     'class_names': ['truck', 'bus'],
 }
 
-# 모델 설정
 MODEL_CONFIG = {
     'backbone': 'YOLOv1',
     'pretrained': False,
     'freeze_backbone': False,
 }
 
-# 훈련 설정
 TRAIN_CONFIG = {
     'batch_size': 32,
     'learning_rate': 0.0001,
@@ -31,7 +28,12 @@ TRAIN_CONFIG = {
     'lambda_noobj': 0.5,
 }
 
-# 데이터 증강 설정
+SAVE_CONFIG = {
+    'save_path': './checkpoints',
+    'project_name': 'vehicle_detection',
+    'save_period': 1,
+}
+
 AUGMENTATION_CONFIG = {
     'horizontal_flip': True,
     'vertical_flip': False,
@@ -40,7 +42,6 @@ AUGMENTATION_CONFIG = {
     'contrast': 0.2,
 }
 
-# 경로 설정
 PATH_CONFIG = {
     'data_dir': 'vehicle_dataset',
     'train_dir': 'vehicle_dataset/train',
@@ -49,25 +50,14 @@ PATH_CONFIG = {
     'log_dir': 'logs',
 }
 
-# 디바이스 설정
+# 모델 저장 설정
+SAVE_CONFIG = {
+    'save_period': 1,
+    'save_path': 'runs',
+    'project_name': 'vehicle_detection',
+}
+
 DEVICE_CONFIG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'num_workers': 4,
 }
-
-# 유틸리티 함수
-def get_input_channels():
-    """입력 채널 수 반환"""
-    return DATASET_CONFIG['input_channels']
-
-def is_rgb():
-    """RGB 모드인지 확인"""
-    return DATASET_CONFIG['input_channels'] == 3
-
-def is_grayscale():
-    """그레이스케일 모드인지 확인"""
-    return DATASET_CONFIG['input_channels'] == 1
-
-def get_image_mode():
-    """PIL 이미지 모드 반환"""
-    return 'RGB' if is_rgb() else 'L'

@@ -7,6 +7,7 @@ from torchvision import transforms
 from tqdm import tqdm
 import time
 import numpy as np
+import os
 from config import *
 
 def get_optimizer(model):
@@ -21,7 +22,7 @@ def get_YOLOv1_criterion(num_classes, lambda_coord=5.0, lambda_noobj=0.5):
     criterion = YOLOv1Loss(num_classes, lambda_coord, lambda_noobj)
     return criterion
 
-def get_model(ch=3, num_classes=80):
+def get_model(ch, num_classes):
     model = YOLOv1(ch, num_classes)
     model = model.to(DEVICE_CONFIG['device'])
     return model
@@ -44,6 +45,51 @@ def get_dataloader():
     dataloader_train = DataLoader(dataset_train, batch_size=TRAIN_CONFIG['batch_size'], shuffle=True, num_workers=DEVICE_CONFIG['num_workers'])
     dataloader_val = DataLoader(dataset_val, batch_size=TRAIN_CONFIG['batch_size'], shuffle=False, num_workers=DEVICE_CONFIG['num_workers'])
     return dataloader_train, dataloader_val
+
+def create_project_dir():
+    save_path = SAVE_CONFIG['save_path']
+    project_name = SAVE_CONFIG['project_name']
+    
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    
+    project_dir = None
+    for i in range(1000):
+        candidate_dir = os.path.join(save_path, f"{project_name}{i}")
+        if not os.path.exists(candidate_dir):
+            project_dir = candidate_dir
+            break
+    
+    if project_dir is None:
+        raise ValueError(f"Could not find available project directory in {save_path}")
+    
+    os.makedirs(project_dir)
+    print(f"📁 Created project directory: {project_dir}")
+    
+    return project_dir
+
+def save_model(model, optimizer, epoch, val_loss, project_dir, is_best=False):
+    save_period = SAVE_CONFIG['save_period']
+    
+    if is_best:
+        best_path = os.path.join(project_dir, 'best.pt')
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'val_loss': val_loss,
+        }, best_path)
+        print(f"💾 Saved best model: {best_path}")
+    
+    if save_period > 0 and (epoch + 1) % save_period == 0:
+        checkpoint_path = os.path.join(project_dir, f'epoch_{epoch+1}.pt')
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'val_loss': val_loss,
+        }, checkpoint_path)
+        print(f"💾 Saved checkpoint: {checkpoint_path}")
 
 def count_instances_in_dataset(dataloader):
     instance_counts = [0] * DATASET_CONFIG['num_classes']
@@ -69,7 +115,6 @@ def print_evaluation_table(tp, fp, fn, instance_counts):
     class_names = DATASET_CONFIG['class_names']
     num_classes = DATASET_CONFIG['num_classes']
     
-    # 각 클래스별 precision, recall, f1-score 계산
     precisions = []
     recalls = []
     f1_scores = []
@@ -99,11 +144,11 @@ def print_evaluation_table(tp, fp, fn, instance_counts):
     print("-"*120)
     
     for i in range(num_classes):
-        print(f"{i}: {class_names[i]:<12} {instance_counts[i]:<10} {tp[i]:<8} {fp[i]:<8} {fn[i]:<8} "
+        print(f"{i}: {class_names[i]:<12} {int(instance_counts[i]):<10} {int(tp[i]):<8} {int(fp[i]):<8} {int(fn[i]):<8} "
               f"{precisions[i]:<12.4f} {recalls[i]:<12.4f} {f1_scores[i]:<12.4f}")
     
     print("-"*120)
-    print(f"{'TOTAL':<15} {total_instances:<10} {total_tp:<8} {total_fp:<8} {total_fn:<8} "
+    print(f"{'TOTAL':<15} {int(total_instances):<10} {int(total_tp):<8} {int(total_fp):<8} {int(total_fn):<8} "
           f"{total_precision:<12.4f} {total_recall:<12.4f} {total_f1_score:<12.4f}")
     print("="*120)
 
@@ -144,6 +189,10 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
     print("🚀 Starting YOLOv1 Training")
     print("=" * 60)
     
+    project_dir = create_project_dir()
+    
+    best_val_loss = float('inf')
+    
     for epoch in range(TRAIN_CONFIG['num_epochs']):
         # Training
         model.train()
@@ -182,6 +231,13 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
         if not torch.isnan(loss):
             val_loss = evaluate(model, criterion, val_dataloader)
             print(f"📊 Epoch {epoch+1} - Train Loss: {train_loss/num_batches:.4f}, Val Loss: {val_loss:.4f}")
+            
+            is_best = val_loss < best_val_loss
+            if is_best:
+                best_val_loss = val_loss
+                print(f"🎯 New best validation loss: {val_loss:.4f}")
+            
+            save_model(model, optimizer, epoch, val_loss, project_dir, is_best=is_best)
         else:
             print(f"❌ Epoch {epoch+1} failed due to NaN loss")
             break
@@ -191,7 +247,7 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
     print("✅ Training completed!")
 
 def main():
-    model = get_model()
+    model = get_model(ch=DATASET_CONFIG['input_channels'], num_classes=DATASET_CONFIG['num_classes'])
     optimizer = get_optimizer(model)
     scheduler = get_scheduler(optimizer)
     criterion = get_YOLOv1_criterion(DATASET_CONFIG['num_classes'])
