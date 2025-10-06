@@ -18,17 +18,10 @@ def load_label_txt(file_path):
 
 # input label shape: (?, 5) cls, cx, cy, w, h
 # output label shape: (grid_size, grid_size, 5*2 + num_classes)
-def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=None):
-    if num_classes is None:
-        num_classes = DATASET_CONFIG['num_classes']
+def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80):
     grid = torch.zeros(grid_size, grid_size, 5*2 + num_classes)
     if label.shape[0] == 0: # background img
         return grid
-
-    if label.shape[0] > 0:
-        areas = label[:, 3] * label[:, 4]
-        sorted_indices = np.argsort(areas)[::-1]
-        label = label[sorted_indices]
 
     for i in range(label.shape[0]):
         cls, cx, cy, w, h = label[i]
@@ -37,9 +30,13 @@ def YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=None):
         cell_x = cx * grid_size - grid_x
         cell_y = cy * grid_size - grid_y
         
-        if grid[grid_y, grid_x, 4] == 0:
+        # 두 박스 중 비어있는 박스에 할당
+        if grid[grid_y, grid_x, 4] == 0:  # 첫 번째 박스가 비어있으면
             grid[grid_y, grid_x, :5] = torch.clamp(torch.tensor([cell_x, cell_y, w, h, 1]), 0.0, 1.0)
+        else:  # 첫 번째 박스가 있으면 두 번째 박스에 할당
+            grid[grid_y, grid_x, 5:10] = torch.clamp(torch.tensor([cell_x, cell_y, w, h, 1]), 0.0, 1.0)
         
+        # 클래스 확률은 항상 설정
         grid[grid_y, grid_x, 10 + int(cls)] = 1.0
     return grid
 
@@ -55,9 +52,9 @@ class YOLOv1Dataset(Dataset):
     def __getitem__(self, idx):
         image_path = self.image_files[idx]
         label_path = image_path.replace('.jpg', '.txt')
-        image = Image.open(image_path).convert('L' if DATASET_CONFIG['input_channels'] == 1 else 'RGB')
+        image = Image.open(image_path).convert(get_image_mode())
         label = load_label_txt(label_path)
-        gt = YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=DATASET_CONFIG['num_classes'])
+        gt = YOLOv1_convert_label_to_grid(label, grid_size=7, num_classes=80)
         if self.transform:
             image = self.transform(image)
         return image, gt

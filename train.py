@@ -1,4 +1,4 @@
-from util import YOLOv1Loss, calculate_yolov1_metrics, calculate_map_metrics
+from util import YOLOv1Loss, calculate_metrics
 from model import YOLOv1
 from dataset import YOLOv1Dataset
 import torch
@@ -13,26 +13,7 @@ def get_optimizer(model):
     return optimizer
 
 def get_scheduler(optimizer):
-    scheduler_type = TRAIN_CONFIG['scheduler_type']
-    scheduler_params = TRAIN_CONFIG['scheduler_params'][scheduler_type]
-    
-    if scheduler_type == 'step':
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, 
-            step_size=scheduler_params['step_size'], 
-            gamma=scheduler_params['gamma']
-        )
-    elif scheduler_type == 'cosine':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, 
-            T_max=scheduler_params['T_max'], 
-            eta_min=scheduler_params['eta_min']
-        )
-    elif scheduler_type == 'none':
-        scheduler = None
-    else:
-        raise ValueError(f"Unknown scheduler type: {scheduler_type}")
-    
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
     return scheduler
 
 def get_YOLOv1_criterion(num_classes, lambda_coord=5.0, lambda_noobj=0.5):
@@ -75,15 +56,7 @@ def evaluate(model, criterion, dataloader):
             targets = targets.to(DEVICE_CONFIG['device'])
             
             outputs = model(images)
-            precision, recall, f1_score = calculate_yolov1_metrics(outputs, targets)
-            map_50 = calculate_map_metrics(outputs, targets, iou_thresholds=[0.5])
-            map_50_95 = calculate_map_metrics(outputs, targets, iou_thresholds=np.arange(0.5, 1.0, 0.05))
-            print('-' * 60)
-            print(f'mAP@0.5: {map_50:.4f}, mAP@0.5-0.95: {map_50_95:.4f}')
-            for cls in range(DATASET_CONFIG['num_classes']):
-                print(f'Class {cls}: Precision: {precision[cls]:.4f}, Recall: {recall[cls]:.4f}, F1 Score: {f1_score[cls]:.4f}')
-            print('-' * 60)
-            
+            calculate_metrics(outputs, targets)
             loss = criterion(outputs, targets)
             
             total_loss += loss.item()
@@ -111,6 +84,7 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
             
             optimizer.zero_grad()
             outputs = model(images)
+            calculate_metrics(outputs, targets)
             loss = criterion(outputs, targets)
             
             # NaN 체크
@@ -140,16 +114,15 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
             print(f"❌ Epoch {epoch+1} failed due to NaN loss")
             break
         
-        if scheduler is not None:
-            scheduler.step()
+        scheduler.step()
     
     print("✅ Training completed!")
 
 def main():
-    model = get_model(ch=DATASET_CONFIG['input_channels'], num_classes=DATASET_CONFIG['num_classes'])
+    model = get_model()
     optimizer = get_optimizer(model)
     scheduler = get_scheduler(optimizer)
-    criterion = get_YOLOv1_criterion(DATASET_CONFIG['num_classes'], TRAIN_CONFIG['lambda_coord'], TRAIN_CONFIG['lambda_noobj'])
+    criterion = get_YOLOv1_criterion(DATASET_CONFIG['num_classes'])
     train_dataloader, val_dataloader = get_dataloader()
     train(model, optimizer, scheduler, criterion, train_dataloader, val_dataloader)
 

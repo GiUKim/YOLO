@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
-from config import DATASET_CONFIG
+from config import get_input_channels
 
 class YOLOv1Backbone(nn.Module):
     def __init__(self, ch=3, num_classes=80):
         super().__init__()
         self.ch = ch
         self.num_classes = num_classes
-        self.conv1_1 = nn.Conv2d(DATASET_CONFIG['input_channels'], 64, kernel_size=7, stride=2, padding=3)
+        self.conv1_1 = nn.Conv2d(get_input_channels(), 64, kernel_size=7, stride=2, padding=3)
         self.relu1_1 = nn.LeakyReLU(0.1)
         self.maxpool1_1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
@@ -139,17 +139,11 @@ class YOLOv1(nn.Module):
     def forward(self, x):
         x = self.backbone(x)  # (batch_size, 7*7*(5*2+num_classes))
         x = x.view(x.size(0), 7, 7, 5 * 2 + self.num_classes)  # (batch_size, 7, 7, 5*2+num_classes)
-        
-        box1 = torch.sigmoid(x[:, :, :, 0:5])
-        box2 = torch.sigmoid(x[:, :, :, 5:10])
-        class_logits = x[:, :, :, 10:]
-        classes = torch.softmax(class_logits, dim=-1)
-        x = torch.cat([box1, box2, classes], dim=-1)
         return x
 
 
 if __name__ == "__main__":
-    model = YOLOv1(ch=3, num_classes=DATASET_CONFIG['num_classes'])
+    model = YOLOv1(ch=3, num_classes=80)
     
     x = torch.randn(1, 3, 448, 448)
     
@@ -162,6 +156,7 @@ if __name__ == "__main__":
         output = model(x)
     
     print(f"Output shape: {output.shape}")
+    print(f"Expected output shape: (1, 7, 7, 90) for 80 classes")
     print("=" * 50)
     
     try:
