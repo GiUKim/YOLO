@@ -154,7 +154,16 @@ class YOLOv1Loss(nn.Module):
             return torch.tensor(0.0, requires_grad=True, device=pred.device)
         
         return total_loss / batch_size
-    
+
+def convert_coordinate_cell_to_image(box, cell_y, cell_x, grid_size):
+    cx, cy = box[:2]
+    new_cx = (1 / grid_size) * (cell_x + cx)
+    new_cy = (1 / grid_size) * (cell_y + cy)
+    new_box = box.copy()
+    new_box[0] = new_cx
+    new_box[1] = new_cy
+    return new_box
+
 def iou(box1, box2):
     x1, y1, w1, h1 = box1
     x2, y2, w2, h2 = box2
@@ -199,6 +208,9 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
                 target_box1 = cell_target[:5]
                                 
                 pred_conf1, pred_conf2 = pred_box1[-1], pred_box2[-1]
+                pred_box1[:-1] = convert_coordinate_cell_to_image(pred_box1[:-1], cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                pred_box2[:-1] = convert_coordinate_cell_to_image(pred_box2[:-1], cell_y, cell_x, DATASET_CONFIG['grid_size'])
+                target_box1[:-1] = convert_coordinate_cell_to_image(target_box1[:-1], cell_y, cell_x, DATASET_CONFIG['grid_size'])
                 pred_has_obj1 = (pred_conf1 > conf_threshold)
                 pred_has_obj2 = (pred_conf2 > conf_threshold)
 
