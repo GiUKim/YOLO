@@ -139,6 +139,9 @@ class YOLOv1(nn.Module):
     def forward(self, x):
         x = self.backbone(x)  # (batch_size, 7*7*(5*2+num_classes))
         x = x.view(x.size(0), 7, 7, 5 * 2 + self.num_classes)  # (batch_size, 7, 7, 5*2+num_classes)
+        bbox_output = torch.sigmoid(x[:, :, :, :5*2])
+        class_output = torch.softmax(x[:, :, :, 5*2:], dim=-1)
+        x = torch.cat([bbox_output, class_output], dim=-1)
         return x
 
 
