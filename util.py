@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from config import DATASET_CONFIG
+import numpy as np
 
 class YOLOv1Loss(nn.Module):
     def __init__(self, num_classes=80, lambda_coord=5.0, lambda_noobj=0.5):
@@ -185,9 +186,9 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
     num_classes = DATASET_CONFIG['num_classes']
     batch_size = pred.shape[0]
 
-    tp = [0] * DATASET_CONFIG['num_classes']
-    fp = [0] * DATASET_CONFIG['num_classes']
-    fn = [0] * DATASET_CONFIG['num_classes']
+    tp = np.zeros(DATASET_CONFIG['num_classes'])
+    fp = np.zeros(DATASET_CONFIG['num_classes'])
+    fn = np.zeros(DATASET_CONFIG['num_classes'])
     for i in range(batch_size):
         for cell_y in range(DATASET_CONFIG['grid_size']):
             for cell_x in range(DATASET_CONFIG['grid_size']):
@@ -195,18 +196,17 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
                 cell_target = target[i, cell_y, cell_x]
                 
                 pred_box1, pred_box2 = cell_pred[:5], cell_pred[5:10]
-                target_box1, target_box2 = cell_target[:5], cell_target[5:10]
+                target_box1 = cell_target[:5]
                                 
                 pred_conf1, pred_conf2 = pred_box1[-1], pred_box2[-1]
                 pred_has_obj1 = (pred_conf1 > conf_threshold)
                 pred_has_obj2 = (pred_conf2 > conf_threshold)
 
                 target_has_obj1 = (target_box1[-1] == 1)
-                target_has_obj2 = (target_box2[-1] == 1)
-                num_gt_obj = target_has_obj1 + target_has_obj2
+                num_gt_obj = target_has_obj1
                 
-                pred_cls = torch.argmax(cell_pred[10:])
-                target_cls = torch.argmax(cell_target[10:])
+                pred_cls = np.argmax(cell_pred[10:])
+                target_cls = np.argmax(cell_target[10:])
 
                 # case1 : pred #?, gt #0
                 if (num_gt_obj == 0):
@@ -218,62 +218,31 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5
                 # case2 : pred #0, gt #1
                 # case3 : pred #1, gt #1
                 # case4 : pred #2, gt #1
-                if (num_gt_obj == 1):
-                    if (not pred_has_obj1) and (not pred_has_obj2): # case 2
-                        fn[target_cls] += 1
-                    if (pred_has_obj1 and not pred_has_obj2) or (not pred_has_obj1 and pred_has_obj2): # case 3
-                        if (pred_has_obj1):
-                            _iou = iou(pred_box1[:-1], target_box1[:-1])
-                            if (_iou > iou_threshold) and (pred_cls == target_cls):
-                                tp[target_cls] += 1
-                            else:
-                                fp[pred_cls] += 1
+                if (not pred_has_obj1) and (not pred_has_obj2): # case 2
+                    fn[target_cls] += 1
+                if (pred_has_obj1 and not pred_has_obj2) or (not pred_has_obj1 and pred_has_obj2): # case 3
+                    if (pred_has_obj1):
+                        _iou = iou(pred_box1[:-1], target_box1[:-1])
+                        if (_iou > iou_threshold) and (pred_cls == target_cls):
+                            tp[target_cls] += 1
                         else:
-                            _iou = iou(pred_box2[:-1], target_box2[:-1])
-                            if (_iou > iou_threshold) and (pred_cls == target_cls):
-                                tp[target_cls] += 1
-                            else:
-                                fp[pred_cls] += 1
-                    if (pred_has_obj1) and (pred_has_obj2): # case 4
-                        match_idx = -1
-                        best_iou = 0
-                        # TODO; logic
-
-
-                # case5 : pred #0, gt #2
-                # case6 : pred #1, gt #2
-                # case7 : pred #2, gt #2
-
-
-                # if (pred_conf1 > conf_threshold): # obj prediction
-                #     best_iou = 0
-                #     _iou = iou(pred_box1[:-1], target_box1[:-1])
-                #     if (target_has_obj1):
-                #         if (_iou > iou_threshold):
-                #             tp[target_cls] += 1
-                #         else:
-                #             fp[pred_cls] += 1
-                #     else:
-                #         fp[pred_cls] += 1
-                # else: # no obj prediction
-                #     if (target_has_obj1):
-                #         fn[target_cls] += 1
-                #     else:
-                #         pass
-
-                # if (pred_conf2 > conf_threshold): # obj prediction
-                #     _iou = iou(pred_box2[:-1], target_box2[:-1])
-                #     if (target_has_obj1):
-                #         if (_iou > iou_threshold):
-                #             tp[target_cls] += 1
-                #         else:
-                #             fp[pred_cls] += 1
-                #     else:
-                #         fp[pred_cls] += 1
-                # else: # no obj prediction
-                #     if (target_has_obj2):
-                #         fn[target_cls] += 1
-                #     else:
-                #         pass
-                
-
+                            fp[pred_cls] += 1
+                    else:
+                        _iou = iou(pred_box2[:-1], target_box1[:-1])
+                        if (_iou > iou_threshold) and (pred_cls == target_cls):
+                            tp[target_cls] += 1
+                        else:
+                            fp[pred_cls] += 1
+                if (pred_has_obj1) and (pred_has_obj2): # case 4
+                    if (pred_cls == target_cls):
+                        fp[pred_cls] += 1
+                        _iou1 = iou(pred_box1[:-1], target_box1[:-1])
+                        _iou2 = iou(pred_box2[:-1], target_box1[:-1])
+                        max_iou = max(_iou1, _iou2)
+                        if (max_iou > iou_threshold):
+                            tp[target_cls] += 1
+                        else:
+                            fp[pred_cls] += 1
+                    else:
+                        fp[pred_cls] += 2
+    return tp, fp, fn

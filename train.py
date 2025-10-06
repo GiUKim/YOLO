@@ -1,4 +1,4 @@
-from util import YOLOv1Loss, calculate_metrics
+from util import YOLOv1Loss, calculate_yolov1_metrics
 from model import YOLOv1
 from dataset import YOLOv1Dataset
 import torch
@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 import time
+import numpy as np
 from config import *
 
 def get_optimizer(model):
@@ -44,10 +45,76 @@ def get_dataloader():
     dataloader_val = DataLoader(dataset_val, batch_size=TRAIN_CONFIG['batch_size'], shuffle=False, num_workers=DEVICE_CONFIG['num_workers'])
     return dataloader_train, dataloader_val
 
+def count_instances_in_dataset(dataloader):
+    instance_counts = [0] * DATASET_CONFIG['num_classes']
+    
+    for images, targets in dataloader:
+        targets = targets.detach().cpu().numpy()
+        batch_size = targets.shape[0]
+        
+        for i in range(batch_size):
+            for cell_y in range(DATASET_CONFIG['grid_size']):
+                for cell_x in range(DATASET_CONFIG['grid_size']):
+                    cell_target = targets[i, cell_y, cell_x]
+                    target_box1 = cell_target[:5]
+                    target_has_obj = (target_box1[-1] == 1)
+                    
+                    if target_has_obj:
+                        target_cls = np.argmax(cell_target[10:])
+                        instance_counts[target_cls] += 1
+    
+    return instance_counts
+
+def print_evaluation_table(tp, fp, fn, instance_counts):
+    class_names = DATASET_CONFIG['class_names']
+    num_classes = DATASET_CONFIG['num_classes']
+    
+    # 각 클래스별 precision, recall, f1-score 계산
+    precisions = []
+    recalls = []
+    f1_scores = []
+    
+    for i in range(num_classes):
+        precision = tp[i] / (tp[i] + fp[i] + 1e-6)
+        recall = tp[i] / (tp[i] + fn[i] + 1e-6)
+        f1_score = 2 * precision * recall / (precision + recall + 1e-6)
+        
+        precisions.append(precision)
+        recalls.append(recall)
+        f1_scores.append(f1_score)
+    
+    total_tp = sum(tp)
+    total_fp = sum(fp)
+    total_fn = sum(fn)
+    total_instances = sum(instance_counts)
+    
+    total_precision = total_tp / (total_tp + total_fp + 1e-6)
+    total_recall = total_tp / (total_tp + total_fn + 1e-6)
+    total_f1_score = 2 * total_precision * total_recall / (total_precision + total_recall + 1e-6)
+    
+    print("\n" + "="*120)
+    print("VALIDATION EVALUATION RESULTS")
+    print("="*120)
+    print(f"{'Class':<15} {'Instance':<10} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
+    print("-"*120)
+    
+    for i in range(num_classes):
+        print(f"{i}: {class_names[i]:<12} {instance_counts[i]:<10} {tp[i]:<8} {fp[i]:<8} {fn[i]:<8} "
+              f"{precisions[i]:<12.4f} {recalls[i]:<12.4f} {f1_scores[i]:<12.4f}")
+    
+    print("-"*120)
+    print(f"{'TOTAL':<15} {total_instances:<10} {total_tp:<8} {total_fp:<8} {total_fn:<8} "
+          f"{total_precision:<12.4f} {total_recall:<12.4f} {total_f1_score:<12.4f}")
+    print("="*120)
+
 def evaluate(model, criterion, dataloader):
     model.eval()
     total_loss = 0.0
     num_batches = 0
+    
+    tp = np.zeros(DATASET_CONFIG['num_classes'])
+    fp = np.zeros(DATASET_CONFIG['num_classes'])
+    fn = np.zeros(DATASET_CONFIG['num_classes'])
     
     with torch.no_grad():
         pbar = tqdm(dataloader, desc="Validation", leave=False)
@@ -56,13 +123,19 @@ def evaluate(model, criterion, dataloader):
             targets = targets.to(DEVICE_CONFIG['device'])
             
             outputs = model(images)
-            calculate_metrics(outputs, targets)
             loss = criterion(outputs, targets)
-            
+            _tp, _fp, _fn = calculate_yolov1_metrics(outputs, targets)
+            tp += _tp
+            fp += _fp
+            fn += _fn
             total_loss += loss.item()
             num_batches += 1
             
             pbar.set_postfix({'Loss': f'{loss.item():.4f}'})
+    
+    instance_counts = count_instances_in_dataset(dataloader)
+    
+    print_evaluation_table(tp, fp, fn, instance_counts)
     
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
     return avg_loss
@@ -84,7 +157,6 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
             
             optimizer.zero_grad()
             outputs = model(images)
-            calculate_metrics(outputs, targets)
             loss = criterion(outputs, targets)
             
             # NaN 체크

@@ -9,8 +9,8 @@ DATASET_CONFIG = {
     'image_width': 448,
     'image_height': 448,
     'grid_size': 7,
-    'num_classes': 80,
-    'num_boxes': 2,
+    'num_classes': 2,
+    'class_names': ['truck', 'bus'],
 }
 
 # 모델 설정
@@ -42,9 +42,9 @@ AUGMENTATION_CONFIG = {
 
 # 경로 설정
 PATH_CONFIG = {
-    'data_dir': 'yolo_dataset',
-    'train_dir': 'yolo_dataset/train',
-    'val_dir': 'yolo_dataset/validation',
+    'data_dir': 'vehicle_dataset',
+    'train_dir': 'vehicle_dataset/train',
+    'val_dir': 'vehicle_dataset/validation',
     'checkpoint_dir': 'checkpoints',
     'log_dir': 'logs',
 }
