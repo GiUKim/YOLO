@@ -50,13 +50,6 @@ PATH_CONFIG = {
     'log_dir': 'logs',
 }
 
-# 모델 저장 설정
-SAVE_CONFIG = {
-    'save_period': 1,
-    'save_path': 'runs',
-    'project_name': 'vehicle_detection',
-}
-
 DEVICE_CONFIG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'num_workers': 4,
