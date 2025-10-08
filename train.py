@@ -23,7 +23,7 @@ def get_YOLOv1_criterion(num_classes, lambda_coord=5.0, lambda_noobj=0.5):
     return criterion
 
 def get_model(ch, num_classes):
-    model = YOLOv1(ch, num_classes)
+    model = YOLOv1(ch, num_classes, use_batch_norm=MODEL_CONFIG['use_batch_norm'])
     model = model.to(DEVICE_CONFIG['device'])
     return model
 
