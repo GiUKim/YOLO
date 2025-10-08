@@ -20,7 +20,7 @@ MODEL_CONFIG = {
 
 TRAIN_CONFIG = {
     'batch_size': 32,
-    'learning_rate': 0.0001,
+    'learning_rate': 0.00001,
     'num_epochs': 100,
     'weight_decay': 0.0005,
     'momentum': 0.9,
@@ -51,7 +51,7 @@ PATH_CONFIG = {
 }
 
 PREDICT_CONFIG = {
-    'model_path': './checkpoints/vehicle_detection5/best.pt',
+    'model_path': './checkpoints/vehicle_detection54/best.pt',
     'image_path': 'vehicle_dataset/validation',
     'save_path': './results',
     'confidence_threshold': 0.2,

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from config import DATASET_CONFIG
+from config import DATASET_CONFIG, TRAIN_CONFIG
 import numpy as np
 
 class YOLOv1Loss(nn.Module):
@@ -18,9 +18,6 @@ class YOLOv1Loss(nn.Module):
         confidence_loss = 0.0
         coord_loss = 0.0
         class_loss = 0.0
-        confidence_loss_count = 0
-        coord_loss_count = 0
-        class_loss_count = 0
         # select responsible box
         # Apply lambda_coord and lambda_noobj weights as in YOLOv1 paper
         for b in range(batch_size):
@@ -39,19 +36,22 @@ class YOLOv1Loss(nn.Module):
                         iou2 = iou_tensor(pred_converted_box2, target_converted_box)
                         if iou1 > iou2:
                             # calc classes, coord loss box1 only
-                            coord_loss += F.mse_loss(pred_box1[:2], target_box[:2])
-                            coord_loss += F.mse_loss(torch.sqrt(pred_box1[2:4].clamp(min=1e-6)), torch.sqrt(target_box[2:4].clamp(min=1e-6)))
-                            confidence_loss += F.mse_loss(pred_box1[4], torch.ones_like(pred_box1[4]))
+                            # YOLOv1 coordinate loss: λ_coord * [(x_pred - x_gt)² + (y_pred - y_gt)² + (√w_pred - √w_gt)² + (√h_pred - √h_gt)²]
+                            coord_loss += self.lambda_coord * ((pred_box1[0] - target_box[0])**2 + (pred_box1[1] - target_box[1])**2)
+                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box1[2].clamp(min=1e-6)) - torch.sqrt(target_box[2].clamp(min=1e-6)))**2
+                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box1[3].clamp(min=1e-6)) - torch.sqrt(target_box[3].clamp(min=1e-6)))**2
+                            # YOLOv1 confidence loss: target should be the actual IoU, not 1
+                            confidence_loss += F.mse_loss(pred_box1[4], iou1 * torch.ones_like(pred_box1[4]))
                         else:
                             # box2 is responsible
-                            coord_loss += F.mse_loss(pred_box2[:2], target_box[:2])
-                            coord_loss += F.mse_loss(torch.sqrt(pred_box2[2:4].clamp(min=1e-6)), torch.sqrt(target_box[2:4].clamp(min=1e-6)))
-                            confidence_loss += F.mse_loss(pred_box2[4], torch.ones_like(pred_box2[4]))
-                        confidence_loss_count += 1 # for average loss
-                        coord_loss_count += 1 # for average loss
+                            # YOLOv1 coordinate loss: λ_coord * [(x_pred - x_gt)² + (y_pred - y_gt)² + (√w_pred - √w_gt)² + (√h_pred - √h_gt)²]
+                            coord_loss += self.lambda_coord * ((pred_box2[0] - target_box[0])**2 + (pred_box2[1] - target_box[1])**2)
+                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box2[2].clamp(min=1e-6)) - torch.sqrt(target_box[2].clamp(min=1e-6)))**2
+                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box2[3].clamp(min=1e-6)) - torch.sqrt(target_box[3].clamp(min=1e-6)))**2
+                            # YOLOv1 confidence loss: target should be the actual IoU, not 1
+                            confidence_loss += F.mse_loss(pred_box2[4], iou2 * torch.ones_like(pred_box2[4]))
                         # class loss
                         class_loss += F.mse_loss(pred[b, cell_y, cell_x, 10:], target[b, cell_y, cell_x, 10:])
-                        class_loss_count += 1 # for average loss
                     else:
                         # only calculate confidence negative loss (no object)
                         # Both box1 and box2 confidence losses for noobj
@@ -59,20 +59,11 @@ class YOLOv1Loss(nn.Module):
                         pred_box2 = pred[b, cell_y, cell_x, 5:10]
                         confidence_loss += self.lambda_noobj * F.mse_loss(pred_box1[4], torch.zeros_like(pred_box1[4]))
                         confidence_loss += self.lambda_noobj * F.mse_loss(pred_box2[4], torch.zeros_like(pred_box2[4]))
-                        confidence_loss_count += 2 # for average loss
 
-        # Average the losses
-        if confidence_loss_count > 0:
-            confidence_loss = confidence_loss / confidence_loss_count
-        if coord_loss_count > 0:
-            coord_loss = coord_loss / coord_loss_count
-        if class_loss_count > 0:
-            class_loss = class_loss / class_loss_count
-
-        # Apply lambda_coord and lambda_noobj as in YOLOv1 paper
-        total_loss = self.lambda_coord * coord_loss + confidence_loss + class_loss
-        return total_loss
-
+        # YOLOv1 paper: No averaging - sum all losses directly
+        # Each loss component already has appropriate weights applied
+        total_loss = coord_loss + confidence_loss + class_loss
+        return total_loss / TRAIN_CONFIG['batch_size']
 
 def convert_coordinate_cell_to_image(box, cell_y, cell_x, grid_size):
     cx, cy = box[:2]
