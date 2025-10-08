@@ -212,3 +212,17 @@ def calculate_yolov1_metrics(pred, target, conf_threshold=0.15, iou_threshold=0.
                     else:
                         fp[pred_cls] += 2
     return tp, fp, fn
+
+def NMS(box_list, iou_threshold):
+    # cls, cx, cy, w, h, conf
+    box_list = sorted(box_list, key=lambda x: x[-1], reverse=True)
+    rm_list = []
+    for i in range(len(box_list)):
+        for j in range(i + 1, len(box_list)):
+            if (box_list[i][0] == box_list[j][0]) and (iou(box_list[i][1:-1], box_list[j][1:-1]) > iou_threshold):
+                rm_list.append(j)
+    new_box_list = []
+    for i in range(len(box_list)):
+        if i not in rm_list:
+            new_box_list.append(box_list[i])
+    return new_box_list
