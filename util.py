@@ -142,7 +142,7 @@ def iou(box1, box2):
     
     return inter_area / union_area if union_area > 0 else 0.0
 
-def calculate_yolov1_metrics(pred, target, conf_threshold=0.5, iou_threshold=0.5):
+def calculate_yolov1_metrics(pred, target, conf_threshold=0.15, iou_threshold=0.5):
     pred = pred.detach().cpu().numpy() # (b, grid, grid, 5*2 + num_classes)
     target = target.detach().cpu().numpy() # (b, grid, grid, 5*2 + num_classes)
     num_classes = DATASET_CONFIG['num_classes']
