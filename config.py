@@ -50,6 +50,14 @@ PATH_CONFIG = {
     'log_dir': 'logs',
 }
 
+PREDICT_CONFIG = {
+    'model_path': './checkpoints/vehicle_detection5/best.pt',
+    'image_path': 'vehicle_dataset/validation',
+    'save_path': './results',
+    'confidence_threshold': 0.2,
+    'iou_threshold': 0.5,
+}
+
 DEVICE_CONFIG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'num_workers': 4,
