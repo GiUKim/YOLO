@@ -12,58 +12,153 @@ class YOLOv1Loss(nn.Module):
         self.lambda_noobj = lambda_noobj
         
     def forward(self, pred, target):
-        batch_size = pred.size(0)
-        obj_mask1 = target[:, :, :, 4] == 1
-
-        confidence_loss = 0.0
-        coord_loss = 0.0
-        class_loss = 0.0
-        # select responsible box
-        # Apply lambda_coord and lambda_noobj weights as in YOLOv1 paper
-        for b in range(batch_size):
-            for cell_y in range(DATASET_CONFIG['grid_size']):
-                for cell_x in range(DATASET_CONFIG['grid_size']):
-                    if obj_mask1[b, cell_y, cell_x]:
-                        # GT object exists in this cell
-                        # GT object exist -> competition of box1, box2 (responsible box)
-                        pred_box1 = pred[b, cell_y, cell_x, :5]
-                        pred_box2 = pred[b, cell_y, cell_x, 5:10]
-                        target_box = target[b, cell_y, cell_x, :5]
-                        pred_converted_box1 = convert_coordinate_cell_to_image_tensor(pred_box1, cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                        pred_converted_box2 = convert_coordinate_cell_to_image_tensor(pred_box2, cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                        target_converted_box = convert_coordinate_cell_to_image_tensor(target_box, cell_y, cell_x, DATASET_CONFIG['grid_size'])
-                        iou1 = iou_tensor(pred_converted_box1, target_converted_box)
-                        iou2 = iou_tensor(pred_converted_box2, target_converted_box)
-                        if iou1 > iou2:
-                            # calc classes, coord loss box1 only
-                            # YOLOv1 coordinate loss: λ_coord * [(x_pred - x_gt)² + (y_pred - y_gt)² + (√w_pred - √w_gt)² + (√h_pred - √h_gt)²]
-                            coord_loss += self.lambda_coord * ((pred_box1[0] - target_box[0])**2 + (pred_box1[1] - target_box[1])**2)
-                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box1[2].clamp(min=1e-6)) - torch.sqrt(target_box[2].clamp(min=1e-6)))**2
-                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box1[3].clamp(min=1e-6)) - torch.sqrt(target_box[3].clamp(min=1e-6)))**2
-                            # YOLOv1 confidence loss: target should be the actual IoU, not 1
-                            confidence_loss += F.mse_loss(pred_box1[4], iou1 * torch.ones_like(pred_box1[4]))
-                        else:
-                            # box2 is responsible
-                            # YOLOv1 coordinate loss: λ_coord * [(x_pred - x_gt)² + (y_pred - y_gt)² + (√w_pred - √w_gt)² + (√h_pred - √h_gt)²]
-                            coord_loss += self.lambda_coord * ((pred_box2[0] - target_box[0])**2 + (pred_box2[1] - target_box[1])**2)
-                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box2[2].clamp(min=1e-6)) - torch.sqrt(target_box[2].clamp(min=1e-6)))**2
-                            coord_loss += self.lambda_coord * (torch.sqrt(pred_box2[3].clamp(min=1e-6)) - torch.sqrt(target_box[3].clamp(min=1e-6)))**2
-                            # YOLOv1 confidence loss: target should be the actual IoU, not 1
-                            confidence_loss += F.mse_loss(pred_box2[4], iou2 * torch.ones_like(pred_box2[4]))
-                        # class loss
-                        class_loss += F.mse_loss(pred[b, cell_y, cell_x, 10:], target[b, cell_y, cell_x, 10:])
-                    else:
-                        # only calculate confidence negative loss (no object)
-                        # Both box1 and box2 confidence losses for noobj
-                        pred_box1 = pred[b, cell_y, cell_x, :5]
-                        pred_box2 = pred[b, cell_y, cell_x, 5:10]
-                        confidence_loss += self.lambda_noobj * F.mse_loss(pred_box1[4], torch.zeros_like(pred_box1[4]))
-                        confidence_loss += self.lambda_noobj * F.mse_loss(pred_box2[4], torch.zeros_like(pred_box2[4]))
-
-        # YOLOv1 paper: No averaging - sum all losses directly
-        # Each loss component already has appropriate weights applied
+        batch_size, grid_size = pred.size(0), DATASET_CONFIG['grid_size']
+        device = pred.device
+        
+        pred_box1 = pred[:, :, :, :5]  # (b, g, g, 5)
+        pred_box2 = pred[:, :, :, 5:10]  # (b, g, g, 5)
+        pred_classes = pred[:, :, :, 10:]  # (b, g, g, cls)
+        
+        target_box = target[:, :, :, :5]  # (b, g, g, 5)
+        target_classes = target[:, :, :, 10:]  # (b, g, g, cls)
+        
+        obj_mask = target[:, :, :, 4] == 1  # (b, g, g)
+        noobj_mask = ~obj_mask  # (b, g, g)
+        
+        pred_box1_img = self.convert_cell_coords_to_image_coords(pred_box1, grid_size)
+        pred_box2_img = self.convert_cell_coords_to_image_coords(pred_box2, grid_size)
+        target_box_img = self.convert_cell_coords_to_image_coords(target_box, grid_size)
+        
+        iou1 = self.iou_vectorized(pred_box1_img, target_box_img)  # (b, g, g)
+        iou2 = self.iou_vectorized(pred_box2_img, target_box_img)  # (b, g, g)
+        
+        box1_responsible = iou1 > iou2  # (b, g, g)
+        box2_responsible = ~box1_responsible  # (b, g, g)
+        
+        box1_responsible = box1_responsible & obj_mask
+        box2_responsible = box2_responsible & obj_mask
+        
+        # 1. Coordinate Loss
+        coord_loss = self.yolov1_coord_loss(
+            pred_box1, pred_box2, target_box, 
+            box1_responsible, box2_responsible
+        )
+        
+        # 2. Confidence Loss
+        confidence_loss = self.yolov1_conf_loss(
+            pred_box1, pred_box2, iou1, iou2,
+            box1_responsible, box2_responsible, noobj_mask
+        )
+        
+        # 3. Class Loss
+        class_loss = self.yolov1_class_loss(
+            pred_classes, target_classes, obj_mask
+        )
+        
+        # Total loss
         total_loss = coord_loss + confidence_loss + class_loss
-        return total_loss / TRAIN_CONFIG['batch_size']
+        return total_loss / batch_size
+    
+    def convert_cell_coords_to_image_coords(self, boxes, grid_size):
+        batch_size, grid_h, grid_w = boxes.shape[:3]
+        device = boxes.device
+        
+        cell_x = torch.arange(grid_w, device=device).float().view(1, 1, grid_w, 1)
+        cell_y = torch.arange(grid_h, device=device).float().view(1, grid_h, 1, 1)
+        
+        cx, cy = boxes[:, :, :, 0:1], boxes[:, :, :, 1:2]
+        w, h, conf = boxes[:, :, :, 2:3], boxes[:, :, :, 3:4], boxes[:, :, :, 4:5]
+        
+        new_cx = (1 / grid_size) * (cell_x + cx)
+        new_cy = (1 / grid_size) * (cell_y + cy)
+        
+        return torch.cat([new_cx, new_cy, w, h, conf], dim=-1)
+    
+    def iou_vectorized(self, box1, box2):
+        x1, y1, w1, h1 = box1[:, :, :, 0], box1[:, :, :, 1], box1[:, :, :, 2], box1[:, :, :, 3]
+        x2, y2, w2, h2 = box2[:, :, :, 0], box2[:, :, :, 1], box2[:, :, :, 2], box2[:, :, :, 3]
+        
+        x1_min, y1_min = x1 - w1/2, y1 - h1/2
+        x1_max, y1_max = x1 + w1/2, y1 + h1/2
+        x2_min, y2_min = x2 - w2/2, y2 - h2/2
+        x2_max, y2_max = x2 + w2/2, y2 + h2/2
+        
+        inter_x_min = torch.max(x1_min, x2_min)
+        inter_y_min = torch.max(y1_min, y2_min)
+        inter_x_max = torch.min(x1_max, x2_max)
+        inter_y_max = torch.min(y1_max, y2_max)
+        
+        inter_width = torch.clamp(inter_x_max - inter_x_min, min=0)
+        inter_height = torch.clamp(inter_y_max - inter_y_min, min=0)
+        inter_area = inter_width * inter_height
+        
+        box1_area = w1 * h1
+        box2_area = w2 * h2
+        union_area = box1_area + box2_area - inter_area
+        return inter_area / (union_area + 1e-6)
+    
+    def yolov1_coord_loss(self, pred_box1, pred_box2, target_box, 
+                                     box1_responsible, box2_responsible):
+        # YOLOv1 coordinate loss: λ_coord * [(x_pred - x_gt)² + (y_pred - y_gt)² + (√w_pred - √w_gt)² + (√h_pred - √h_gt)²]
+        device = pred_box1.device
+        coord_loss_box1 = torch.tensor(0.0, device=device)
+        coord_loss_box2 = torch.tensor(0.0, device=device)
+        
+        if box1_responsible.any():
+            # x, y
+            xy_loss_box1 = ((pred_box1[:, :, :, 0] - target_box[:, :, :, 0])**2 + 
+                           (pred_box1[:, :, :, 1] - target_box[:, :, :, 1])**2) * box1_responsible.float()
+            
+            # w, h (with sqrt)
+            w_loss_box1 = ((torch.sqrt(pred_box1[:, :, :, 2].clamp(min=1e-6)) - 
+                           torch.sqrt(target_box[:, :, :, 2].clamp(min=1e-6)))**2) * box1_responsible.float()
+            h_loss_box1 = ((torch.sqrt(pred_box1[:, :, :, 3].clamp(min=1e-6)) - 
+                           torch.sqrt(target_box[:, :, :, 3].clamp(min=1e-6)))**2) * box1_responsible.float()
+            
+            coord_loss_box1 = (xy_loss_box1 + w_loss_box1 + h_loss_box1).sum()
+        
+        if box2_responsible.any():
+            # x, y
+            xy_loss_box2 = ((pred_box2[:, :, :, 0] - target_box[:, :, :, 0])**2 + 
+                           (pred_box2[:, :, :, 1] - target_box[:, :, :, 1])**2) * box2_responsible.float()
+            
+            # w, h (with sqrt)
+            w_loss_box2 = ((torch.sqrt(pred_box2[:, :, :, 2].clamp(min=1e-6)) - 
+                           torch.sqrt(target_box[:, :, :, 2].clamp(min=1e-6)))**2) * box2_responsible.float()
+            h_loss_box2 = ((torch.sqrt(pred_box2[:, :, :, 3].clamp(min=1e-6)) - 
+                           torch.sqrt(target_box[:, :, :, 3].clamp(min=1e-6)))**2) * box2_responsible.float()
+            
+            coord_loss_box2 = (xy_loss_box2 + w_loss_box2 + h_loss_box2).sum()
+        
+        return self.lambda_coord * (coord_loss_box1 + coord_loss_box2)
+    
+    def yolov1_conf_loss(self, pred_box1, pred_box2, iou1, iou2,
+                                          box1_responsible, box2_responsible, noobj_mask):
+        device = pred_box1.device
+        confidence_loss = torch.tensor(0.0, device=device)
+        
+        if box1_responsible.any():
+            confidence_loss += ((pred_box1[:, :, :, 4] - iou1)**2 * box1_responsible.float()).sum()
+        
+        if box2_responsible.any():
+            confidence_loss += ((pred_box2[:, :, :, 4] - iou2)**2 * box2_responsible.float()).sum()
+        
+        # No obj
+        if noobj_mask.any():
+            confidence_loss += self.lambda_noobj * ((pred_box1[:, :, :, 4]**2 * noobj_mask.float()).sum() + 
+                                                   (pred_box2[:, :, :, 4]**2 * noobj_mask.float()).sum())
+        
+        return confidence_loss
+    
+    def yolov1_class_loss(self, pred_classes, target_classes, obj_mask):
+        if not obj_mask.any():
+            return torch.tensor(0.0, device=pred_classes.device)
+        
+        # mse loss
+        class_diff = (pred_classes - target_classes)**2
+        class_loss = (class_diff * obj_mask.unsqueeze(-1).float()).sum()
+        
+        return class_loss
 
 def convert_coordinate_cell_to_image(box, cell_y, cell_x, grid_size):
     cx, cy = box[:2]
