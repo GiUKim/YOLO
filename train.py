@@ -208,7 +208,6 @@ def train(model, optimizer, scheduler, criterion, dataloader, val_dataloader):
             outputs = model(images)
             loss = criterion(outputs, targets)
             
-            # NaN 체크
             if torch.isnan(loss):
                 print(f"⚠️  NaN loss detected at epoch {epoch+1}, batch {num_batches+1}")
                 print(f"   Output range: [{outputs.min().item():.4f}, {outputs.max().item():.4f}]")

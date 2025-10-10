@@ -38,7 +38,6 @@ SAVE_CONFIG = {
 AUGMENTATION_CONFIG = {
     'horizontal_flip': True,
     'vertical_flip': False,
-    'rotation': 10,  # degrees
     'brightness': 0.2,
     'contrast': 0.2,
 }
