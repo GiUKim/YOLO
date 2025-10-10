@@ -16,7 +16,7 @@ MODEL_CONFIG = {
     'backbone': 'YOLOv1',
     'pretrained': False,
     'freeze_backbone': False,
-    'use_batch_norm': True,
+    'use_batch_norm': False,
 }
 
 TRAIN_CONFIG = {
